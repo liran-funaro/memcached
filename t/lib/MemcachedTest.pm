@@ -148,7 +148,6 @@ sub new_memcached {
 
     if ($ENV{T_MEMD_USE_DAEMON}) {
         my ($host, $port) = ($ENV{T_MEMD_USE_DAEMON} =~ m/^([^:]+):(\d+)$/);
-        print STDERR "FOOB: $host $port\n";
         my $conn = IO::Socket::INET->new(PeerAddr => "$host:$port");
         if ($conn) {
             return Memcached::Handle->new(conn => $conn,
