@@ -23,7 +23,7 @@ system, generic in nature, but intended for use in speeding up dynamic
 web applications by alleviating database load.
 
 %prep
-%setup -q
+%setup -q -n %{name}-@FULLVERSION@
 
 
 %build
