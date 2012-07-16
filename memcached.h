@@ -217,7 +217,6 @@ struct slab_stats {
  * Stats stored per-thread.
  */
 struct thread_stats {
-    pthread_mutex_t   mutex;
     uint64_t          get_cmds;
     uint64_t          get_misses;
     uint64_t          touch_cmds;
@@ -233,6 +232,7 @@ struct thread_stats {
     uint64_t          auth_cmds;
     uint64_t          auth_errors;
     struct slab_stats slab_stats[MAX_NUMBER_OF_SLAB_CLASSES];
+    pthread_mutex_t   mutex;
 };
 
 /**
@@ -490,6 +490,15 @@ static inline int mutex_lock(pthread_mutex_t *mutex)
 }
 
 #define mutex_unlock(x) pthread_mutex_unlock(x)
+
+/* pthread_mutex_lock(&c->thread->stats.mutex);
+ * pthread_mutex_unlock(&c->thread->stats.mutex);
+ */
+
+#define thread_stats_lock(c)
+
+#define thread_stats_unlock(c)
+
 
 #include "stats.h"
 #include "slabs.h"

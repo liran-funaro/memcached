@@ -833,9 +833,9 @@ static void complete_nread_ascii(conn *c) {
     int comm = c->cmd;
     enum store_item_type ret;
 
-    pthread_mutex_lock(&c->thread->stats.mutex);
+    thread_stats_lock(c);
     c->thread->stats.slab_stats[it->slabs_clsid].set_cmds++;
-    pthread_mutex_unlock(&c->thread->stats.mutex);
+    thread_stats_unlock(c);
 
     if (strncmp(ITEM_data(it) + it->nbytes - 2, "\r\n", 2) != 0) {
         out_string(c, "CLIENT_ERROR bad data chunk");
@@ -1104,13 +1104,13 @@ static void complete_incr_bin(conn *c) {
                 write_bin_error(c, PROTOCOL_BINARY_RESPONSE_ENOMEM, 0);
             }
         } else {
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             if (c->cmd == PROTOCOL_BINARY_CMD_INCREMENT) {
                 c->thread->stats.incr_misses++;
             } else {
                 c->thread->stats.decr_misses++;
             }
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
 
             write_bin_error(c, PROTOCOL_BINARY_RESPONSE_KEY_ENOENT, 0);
         }
@@ -1128,9 +1128,9 @@ static void complete_update_bin(conn *c) {
 
     item *it = c->item;
 
-    pthread_mutex_lock(&c->thread->stats.mutex);
+    thread_stats_lock(c);
     c->thread->stats.slab_stats[it->slabs_clsid].set_cmds++;
-    pthread_mutex_unlock(&c->thread->stats.mutex);
+    thread_stats_unlock(c);
 
     /* We don't actually receive the trailing two characters in the bin
      * protocol, so we're going to just set them here */
@@ -1218,10 +1218,10 @@ static void process_bin_touch(conn *c) {
         uint32_t bodylen = sizeof(rsp->message.body) + (it->nbytes - 2);
 
         item_update(it);
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.touch_cmds++;
         c->thread->stats.slab_stats[it->slabs_clsid].touch_hits++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         MEMCACHED_COMMAND_TOUCH(c->sfd, ITEM_key(it), it->nkey,
                                 it->nbytes, ITEM_get_cas(it));
@@ -1254,10 +1254,10 @@ static void process_bin_touch(conn *c) {
         /* Remember this command so we can garbage collect it later */
         c->item = it;
     } else {
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.touch_cmds++;
         c->thread->stats.touch_misses++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         MEMCACHED_COMMAND_TOUCH(c->sfd, key, nkey, -1, 0);
 
@@ -1306,10 +1306,10 @@ static void process_bin_get(conn *c) {
         uint32_t bodylen = sizeof(rsp->message.body) + (it->nbytes - 2);
 
         item_update(it);
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.get_cmds++;
         c->thread->stats.slab_stats[it->slabs_clsid].get_hits++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         MEMCACHED_COMMAND_GET(c->sfd, ITEM_key(it), it->nkey,
                               it->nbytes, ITEM_get_cas(it));
@@ -1336,10 +1336,10 @@ static void process_bin_get(conn *c) {
         /* Remember this command so we can garbage collect it later */
         c->item = it;
     } else {
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.get_cmds++;
         c->thread->stats.get_misses++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         MEMCACHED_COMMAND_GET(c->sfd, key, nkey, -1, 0);
 
@@ -1737,9 +1737,9 @@ static void process_bin_complete_sasl_auth(conn *c) {
     switch(result) {
     case SASL_OK:
         write_bin_response(c, "Authenticated", 0, 0, strlen("Authenticated"));
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.auth_cmds++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
         break;
     case SASL_CONTINUE:
         add_bin_header(c, PROTOCOL_BINARY_RESPONSE_AUTH_CONTINUE, 0, 0, outlen);
@@ -1753,10 +1753,10 @@ static void process_bin_complete_sasl_auth(conn *c) {
         if (settings.verbose)
             fprintf(stderr, "Unknown sasl response:  %d\n", result);
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_AUTH_ERROR, 0);
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.auth_cmds++;
         c->thread->stats.auth_errors++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
     }
 }
 
@@ -2131,9 +2131,9 @@ static void process_bin_flush(conn *c) {
     }
     item_flush_expired();
 
-    pthread_mutex_lock(&c->thread->stats.mutex);
+    thread_stats_lock(c);
     c->thread->stats.flush_cmds++;
-    pthread_mutex_unlock(&c->thread->stats.mutex);
+    thread_stats_unlock(c);
 
     write_bin_response(c, NULL, 0, 0, 0);
 }
@@ -2161,9 +2161,9 @@ static void process_bin_delete(conn *c) {
         uint64_t cas = ntohll(req->message.header.request.cas);
         if (cas == 0 || cas == ITEM_get_cas(it)) {
             MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.slab_stats[it->slabs_clsid].delete_hits++;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
             item_unlink(it);
             write_bin_response(c, NULL, 0, 0, 0);
         } else {
@@ -2172,9 +2172,9 @@ static void process_bin_delete(conn *c) {
         item_remove(it);      /* release our reference */
     } else {
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_KEY_ENOENT, 0);
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.delete_misses++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
     }
 }
 
@@ -2277,24 +2277,24 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
         if(old_it == NULL) {
             // LRU expired
             stored = NOT_FOUND;
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.cas_misses++;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
         }
         else if (ITEM_get_cas(it) == ITEM_get_cas(old_it)) {
             // cas validates
             // it and old_it may belong to different classes.
             // I'm updating the stats for the one that's getting pushed out
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.slab_stats[old_it->slabs_clsid].cas_hits++;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
 
             item_replace(old_it, it, hv);
             stored = STORED;
         } else {
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.slab_stats[old_it->slabs_clsid].cas_badval++;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
 
             if(settings.verbose > 1) {
                 fprintf(stderr, "CAS:  failure: expected %llu, got %llu\n",
@@ -2803,19 +2803,19 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                     fprintf(stderr, ">%d sending key %s\n", c->sfd, ITEM_key(it));
 
                 /* item_get() has incremented it->refcount for us */
-                pthread_mutex_lock(&c->thread->stats.mutex);
+                thread_stats_lock(c);
                 c->thread->stats.slab_stats[it->slabs_clsid].get_hits++;
                 c->thread->stats.get_cmds++;
-                pthread_mutex_unlock(&c->thread->stats.mutex);
+                thread_stats_unlock(c);
                 item_update(it);
                 *(c->ilist + i) = it;
                 i++;
 
             } else {
-                pthread_mutex_lock(&c->thread->stats.mutex);
+                thread_stats_lock(c);
                 c->thread->stats.get_misses++;
                 c->thread->stats.get_cmds++;
-                pthread_mutex_unlock(&c->thread->stats.mutex);
+                thread_stats_unlock(c);
                 MEMCACHED_COMMAND_GET(c->sfd, key, nkey, -1, 0);
             }
 
@@ -2974,18 +2974,18 @@ static void process_touch_command(conn *c, token_t *tokens, const size_t ntokens
     it = item_touch(key, nkey, realtime(exptime_int));
     if (it) {
         item_update(it);
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.touch_cmds++;
         c->thread->stats.slab_stats[it->slabs_clsid].touch_hits++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         out_string(c, "TOUCHED");
         item_remove(it);
     } else {
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.touch_cmds++;
         c->thread->stats.touch_misses++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         out_string(c, "NOT_FOUND");
     }
@@ -3025,13 +3025,13 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
         out_string(c, "SERVER_ERROR out of memory");
         break;
     case DELTA_ITEM_NOT_FOUND:
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         if (incr) {
             c->thread->stats.incr_misses++;
         } else {
             c->thread->stats.decr_misses++;
         }
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         out_string(c, "NOT_FOUND");
         break;
@@ -3089,13 +3089,13 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
         MEMCACHED_COMMAND_DECR(c->sfd, ITEM_key(it), it->nkey, value);
     }
 
-    pthread_mutex_lock(&c->thread->stats.mutex);
+    thread_stats_lock(c);
     if (incr) {
         c->thread->stats.slab_stats[it->slabs_clsid].incr_hits++;
     } else {
         c->thread->stats.slab_stats[it->slabs_clsid].decr_hits++;
     }
-    pthread_mutex_unlock(&c->thread->stats.mutex);
+    thread_stats_unlock(c);
 
     snprintf(buf, INCR_MAX_STORAGE_LEN, "%llu", (unsigned long long)value);
     res = strlen(buf);
@@ -3168,17 +3168,17 @@ static void process_delete_command(conn *c, token_t *tokens, const size_t ntoken
     if (it) {
         MEMCACHED_COMMAND_DELETE(c->sfd, ITEM_key(it), it->nkey);
 
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.slab_stats[it->slabs_clsid].delete_hits++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         item_unlink(it);
         item_remove(it);      /* release our reference */
         out_string(c, "DELETED");
     } else {
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.delete_misses++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         out_string(c, "NOT_FOUND");
     }
@@ -3292,9 +3292,9 @@ static void process_command(conn *c, char *command) {
 
         set_noreply_maybe(c, tokens, ntokens);
 
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.flush_cmds++;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         if(ntokens == (c->noreply ? 3 : 2)) {
             settings.oldest_live = current_time - 1;
@@ -3527,9 +3527,9 @@ static enum try_read_result try_read_udp(conn *c) {
                    0, &c->request_addr, &c->request_addr_size);
     if (res > 8) {
         unsigned char *buf = (unsigned char *)c->rbuf;
-        pthread_mutex_lock(&c->thread->stats.mutex);
+        thread_stats_lock(c);
         c->thread->stats.bytes_read += res;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+        thread_stats_unlock(c);
 
         /* Beginning of UDP packet is the request ID; save it. */
         c->request_id = buf[0] * 256 + buf[1];
@@ -3597,9 +3597,9 @@ static enum try_read_result try_read_network(conn *c) {
         int avail = c->rsize - c->rbytes;
         res = read(c->sfd, c->rbuf + c->rbytes, avail);
         if (res > 0) {
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.bytes_read += res;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
             gotdata = READ_DATA_RECEIVED;
             c->rbytes += res;
             if (res == avail) {
@@ -3693,9 +3693,9 @@ static enum transmit_result transmit(conn *c) {
 
         res = sendmsg(c->sfd, m, 0);
         if (res > 0) {
-            pthread_mutex_lock(&c->thread->stats.mutex);
+            thread_stats_lock(c);
             c->thread->stats.bytes_written += res;
-            pthread_mutex_unlock(&c->thread->stats.mutex);
+            thread_stats_unlock(c);
 
             /* We've written some of the data. Remove the completed
                iovec entries from the list of pending writes. */
@@ -3838,9 +3838,9 @@ static void drive_machine(conn *c) {
             if (nreqs >= 0) {
                 reset_cmd_handler(c);
             } else {
-                pthread_mutex_lock(&c->thread->stats.mutex);
+                thread_stats_lock(c);
                 c->thread->stats.conn_yields++;
-                pthread_mutex_unlock(&c->thread->stats.mutex);
+                thread_stats_unlock(c);
                 if (c->rbytes > 0) {
                     /* We have already read in data into the input buffer,
                        so libevent will most likely not signal read events
@@ -3881,9 +3881,9 @@ static void drive_machine(conn *c) {
             /*  now try reading from the socket */
             res = read(c->sfd, c->ritem, c->rlbytes);
             if (res > 0) {
-                pthread_mutex_lock(&c->thread->stats.mutex);
+                thread_stats_lock(c);
                 c->thread->stats.bytes_read += res;
-                pthread_mutex_unlock(&c->thread->stats.mutex);
+                thread_stats_unlock(c);
                 if (c->rcurr == c->ritem) {
                     c->rcurr += res;
                 }
@@ -3936,9 +3936,9 @@ static void drive_machine(conn *c) {
             /*  now try reading from the socket */
             res = read(c->sfd, c->rbuf, c->rsize > c->sbytes ? c->sbytes : c->rsize);
             if (res > 0) {
-                pthread_mutex_lock(&c->thread->stats.mutex);
+                thread_stats_lock(c);
                 c->thread->stats.bytes_read += res;
-                pthread_mutex_unlock(&c->thread->stats.mutex);
+                thread_stats_unlock(c);
                 c->sbytes -= res;
                 break;
             }
