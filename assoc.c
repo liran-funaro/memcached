@@ -32,7 +32,7 @@ typedef  unsigned long  int  ub4;   /* unsigned 4-byte quantities */
 typedef  unsigned       char ub1;   /* unsigned 1-byte quantities */
 
 /* how many powers of 2's worth of buckets we use */
-static unsigned int hashpower = HASHPOWER_DEFAULT;
+unsigned int hashpower = HASHPOWER_DEFAULT;
 
 #define hashsize(n) ((ub4)1<<(n))
 #define hashmask(n) (hashsize(n)-1)
@@ -51,6 +51,7 @@ static unsigned int hash_items = 0;
 
 /* Flag: Are we in the middle of expanding now? */
 static bool expanding = false;
+static bool started_expanding = false;
 
 /*
  * During expansion we migrate values with bucket granularity; this is how
@@ -136,11 +137,17 @@ static void assoc_expand(void) {
         stats.hash_bytes += hashsize(hashpower) * sizeof(void *);
         stats.hash_is_expanding = 1;
         STATS_UNLOCK();
-        pthread_cond_signal(&maintenance_cond);
     } else {
         primary_hashtable = old_hashtable;
         /* Bad news, but we can keep running. */
     }
+}
+
+static void assoc_start_expand(void) {
+    if (started_expanding)
+        return;
+    started_expanding = true;
+    pthread_cond_signal(&maintenance_cond);
 }
 
 /* Note: this isn't an assoc_update.  The key must not already exist to call this */
@@ -161,7 +168,7 @@ int assoc_insert(item *it, const uint32_t hv) {
 
     hash_items++;
     if (! expanding && hash_items > (hashsize(hashpower) * 3) / 2) {
-        assoc_expand();
+        assoc_start_expand();
     }
 
     MEMCACHED_ASSOC_INSERT(ITEM_key(it), it->nkey, hash_items);
@@ -231,8 +238,14 @@ static void *assoc_maintenance_thread(void *arg) {
         }
 
         if (!expanding) {
+            /* finished expanding. tell all threads to use fine-grained locks */
+            switch_item_lock_type(ITEM_LOCK_GRANULAR);
+            started_expanding = false;
             /* We are done expanding.. just wait for next invocation */
             pthread_cond_wait(&maintenance_cond, &cache_lock);
+            /* Before doing anything, tell threads to use a global lock */
+            switch_item_lock_type(ITEM_LOCK_GLOBAL);
+            assoc_expand();
         }
 
         mutex_unlock(&cache_lock);
