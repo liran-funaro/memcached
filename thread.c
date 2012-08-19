@@ -130,15 +130,23 @@ void item_lock(uint32_t hv) {
     }
 }
 
-int item_trylock(uint32_t hv) {
-    uint8_t *lock_type = pthread_getspecific(item_lock_type_key);
-    if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {
-        return pthread_mutex_trylock(&item_locks[(hv & hashmask(hashpower)) % item_lock_count]);
-    } else {
-        /* Special case: trylock is only used if an item lock is already held.
-         * So return success here. */
-        return 0;
+/* Special case. When ITEM_LOCK_GLOBAL mode is enabled, this should become a
+ * no-op, as it's only called from within the item lock if necessary.
+ * However, we can't mix a no-op and threads which are still synchronizing to
+ * GLOBAL. So instead we just always try to lock. When in GLOBAL mode this
+ * turns into an effective no-op. Threads re-synchronize after the power level
+ * switch so it should stay safe.
+ */
+void *item_trylock(uint32_t hv) {
+    pthread_mutex_t *lock = &item_locks[(hv & hashmask(hashpower)) % item_lock_count];
+    if (pthread_mutex_trylock(lock) == 0) {
+        return lock;
     }
+    return NULL;
+}
+
+void item_trylock_unlock(void *lock) {
+    mutex_unlock((pthread_mutex_t *) lock);
 }
 
 void item_unlock(uint32_t hv) {
