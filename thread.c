@@ -112,6 +112,15 @@ unsigned short refcount_decr(unsigned short *refcount) {
 #endif
 }
 
+/* Convenience functions for calling *only* when in ITEM_LOCK_GLOBAL mode */
+void item_lock_global(void) {
+    mutex_lock(&item_global_lock);
+}
+
+void item_unlock_global(void) {
+    mutex_unlock(&item_global_lock);
+}
+
 void item_lock(uint32_t hv) {
     uint8_t *lock_type = pthread_getspecific(item_lock_type_key);
     if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {

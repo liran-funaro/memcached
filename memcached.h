@@ -537,6 +537,8 @@ void  item_stats_sizes(ADD_STAT add_stats, void *c);
 void  item_unlink(item *it);
 void  item_update(item *it);
 
+void item_lock_global(void);
+void item_unlock_global(void);
 void item_lock(uint32_t hv);
 int item_trylock(uint32_t hv);
 void item_unlock(uint32_t hv);

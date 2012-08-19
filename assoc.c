@@ -208,6 +208,7 @@ static void *assoc_maintenance_thread(void *arg) {
 
         /* Lock the cache, and bulk move multiple buckets to the new
          * hash table. */
+        item_lock_global();
         mutex_lock(&cache_lock);
 
         for (ii = 0; ii < hash_bulk_move && expanding; ++ii) {
@@ -237,6 +238,9 @@ static void *assoc_maintenance_thread(void *arg) {
             }
         }
 
+        mutex_unlock(&cache_lock);
+        item_unlock_global();
+
         if (!expanding) {
             /* finished expanding. tell all threads to use fine-grained locks */
             switch_item_lock_type(ITEM_LOCK_GRANULAR);
@@ -244,11 +248,12 @@ static void *assoc_maintenance_thread(void *arg) {
             /* We are done expanding.. just wait for next invocation */
             pthread_cond_wait(&maintenance_cond, &cache_lock);
             /* Before doing anything, tell threads to use a global lock */
+            mutex_unlock(&cache_lock);
             switch_item_lock_type(ITEM_LOCK_GLOBAL);
+            mutex_lock(&cache_lock);
             assoc_expand();
+            mutex_unlock(&cache_lock);
         }
-
-        mutex_unlock(&cache_lock);
     }
     return NULL;
 }
