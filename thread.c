@@ -121,10 +121,23 @@ void item_unlock_global(void) {
     mutex_unlock(&item_global_lock);
 }
 
+static int amutex_lock(pthread_mutex_t *mutex)
+{
+    if (pthread_mutex_trylock(mutex)) {
+        STATS_LOCK();
+        stats.lock_cols++;
+        STATS_UNLOCK();
+    } else {
+        return 0;
+    }
+    while (pthread_mutex_trylock(mutex));
+    return 0;
+}
+
 void item_lock(uint32_t hv) {
     uint8_t *lock_type = pthread_getspecific(item_lock_type_key);
     if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {
-        mutex_lock(&item_locks[(hv & hashmask(hashpower)) % item_lock_count]);
+        amutex_lock(&item_locks[(hv & hashmask(hashpower)) % item_lock_count]);
     } else {
         mutex_lock(&item_global_lock);
     }
