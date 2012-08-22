@@ -18,7 +18,7 @@ unless (@files) {
 }
 
 foreach my $f (@files) {
-    open(my $fh, $f) or die;
+    open(my $fh, $f) or die "Could not open a file for write $f\n";
     my $before = do { local $/; <$fh>; };
     close ($fh);
     my $after = $before;
