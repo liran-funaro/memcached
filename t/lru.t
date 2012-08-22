@@ -42,7 +42,7 @@ for (my $i = 0; $i < 100; $i++) {
 # some evictions should have happened
 my $stats = mem_stats($sock);
 my $evictions = int($stats->{"evictions"});
-ok($evictions == 37, "some evictions happened");
+ok($evictions == 38, "some evictions happened");
 
 # the first big value should be gone
 mem_get_is($sock, "big", undef);
