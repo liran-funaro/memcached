@@ -177,6 +177,8 @@ static int grow_slab_list (const unsigned int id) {
         size_t new_size =  (p->list_size != 0) ? p->list_size * 2 : 16;
         void *new_list = realloc(p->slab_list, new_size * sizeof(void *));
         if (new_list == 0) return 0;
+        /*For accurate memory accounting, pointer sizes must also be ccounted*/
+        mem_malloced+=(new_size-p->list_size)* sizeof(void *);
         p->list_size = new_size;
         p->slab_list = new_list;
     }
@@ -210,7 +212,6 @@ static int do_slabs_newslab(const unsigned int id) {
     split_slab_page_into_freelist(ptr, id);
 
     p->slab_list[p->slabs++] = ptr;
-    mem_malloced += len;
     MEMCACHED_SLABS_SLABCLASS_ALLOCATE(id);
 
     return 1;
@@ -377,6 +378,9 @@ static void *memory_allocate(size_t size) {
     if (mem_base == NULL) {
         /* We are not using a preallocated large memory chunk */
         ret = malloc(size);
+        if (ret)
+            mem_malloced+=size;
+
     } else {
         ret = mem_current;
 
