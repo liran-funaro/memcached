@@ -155,7 +155,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
              * eviction happens.
              */
             if (settings.slab_automove == 2)
-                slabs_reassign(-1, id);
+                slabs_reassign(-1, id, 1);
         } else {
             refcount_decr(&search->refcount);
         }

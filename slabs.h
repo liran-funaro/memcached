@@ -38,10 +38,21 @@ void stop_slab_maintenance_thread(void);
 
 enum reassign_result_type {
     REASSIGN_OK=0, REASSIGN_RUNNING, REASSIGN_BADCLASS, REASSIGN_NOSPARE,
-    REASSIGN_SRC_DST_SAME
+    REASSIGN_SRC_DST_SAME, REASSIGN_KILL_FEW
+
 };
 
-enum reassign_result_type slabs_reassign(int src, int dst);
+/** Reassignment (dst>0):
+    If src > 0 and dst > 0:   reassign 1 slab from src to dst.
+    If src < 0 and dst > 0:   reassign 1 slab from anywhere to dst.
+    Todo: reassign -src slabs from anywhere to dst?
+
+    Shrinkage ( src>0, dst=0): shrink num_slabs slabs from src.
+
+    num_slabs is currently supported only in shrinkage.
+    In reassignment it is always 1.
+*/
+enum reassign_result_type slabs_reassign(int src, int dst, int num_slabs);
 
 /** Actually process the change of maxbytes*/
 int memory_shrink_expand(const size_t size);

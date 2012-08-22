@@ -465,7 +465,7 @@ struct slab_rebalance {
     void *slab_pos;
     int s_clsid;
     int d_clsid;
-    unsigned int slabs_to_kill;
+    unsigned int num_slabs;
     int busy_items;
     uint8_t done;
 };

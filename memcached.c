@@ -3253,8 +3253,8 @@ static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t 
             }
         }else
             out_string(c, "OK");/*Increasing memory limitation, nothing to check*/
-        
-        
+
+
         settings.maxbytes = newmaxbytes;
     }
     return;
@@ -3377,7 +3377,7 @@ static void process_command(conn *c, char *command) {
 
     } else if (ntokens > 1 && strcmp(tokens[COMMAND_TOKEN].value, "slabs") == 0) {
         if (ntokens == 5 && strcmp(tokens[COMMAND_TOKEN + 1].value, "reassign") == 0) {
-            int src, dst, rv;
+            int src, dst, rv, num_slabs=1;
 
             if (settings.slab_reassign == false) {
                 out_string(c, "CLIENT_ERROR slab reassignment disabled");
@@ -3392,7 +3392,19 @@ static void process_command(conn *c, char *command) {
                 return;
             }
 
-            rv = slabs_reassign(src, dst);
+            if (dst<0){
+                /*shrinkage*/
+                num_slabs=-dst;/*overriding the negative dst input parameter
+                                 to insert the num_slabs.
+                                 A better way might be to change the user interface
+                                 by adding an optional additional parameter.
+                                 A problem with this method is that for reassignment,
+                                 the number is alway 1, because both parameters are used.
+                               */
+                dst=0;
+            }
+
+            rv = slabs_reassign(src, dst, num_slabs);
             switch (rv) {
             case REASSIGN_OK:
                 out_string(c, "OK");
@@ -3402,6 +3414,9 @@ static void process_command(conn *c, char *command) {
                 break;
             case REASSIGN_BADCLASS:
                 out_string(c, "BADCLASS invalid src or dst class id");
+                break;
+            case REASSIGN_KILL_FEW:
+                out_string(c, "KILL_FEW asking to deal with too few pages");
                 break;
             case REASSIGN_NOSPARE:
                 out_string(c, "NOSPARE source class has no spare pages");

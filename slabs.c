@@ -450,23 +450,33 @@ int slab_bulk_check = DEFAULT_SLAB_BULK_CHECK;
 static int slab_rebalance_start(void) {
     slabclass_t *s_cls;
     int no_go = 0;
+    bool shrink=(slab_rebal.d_clsid==0);
+
 
     pthread_mutex_lock(&cache_lock);
     pthread_mutex_lock(&slabs_lock);
 
     if (slab_rebal.s_clsid < POWER_SMALLEST ||
         slab_rebal.s_clsid > power_largest  ||
-        slab_rebal.d_clsid < POWER_SMALLEST ||
-        slab_rebal.d_clsid > power_largest  ||
+        (!shrink && (
+                     slab_rebal.d_clsid < POWER_SMALLEST ||
+                     slab_rebal.d_clsid > power_largest  ) )||
         slab_rebal.s_clsid == slab_rebal.d_clsid)
         no_go = -2;
 
     s_cls = &slabclass[slab_rebal.s_clsid];
 
-    if (!grow_slab_list(slab_rebal.d_clsid)) {
+    /* check only when reasigning, not when shrinking*/
+    if (slab_rebal.d_clsid && (!grow_slab_list(slab_rebal.d_clsid))) {
         no_go = -1;
     }
 
+    /*If we take more than 1, we make the decision once, but run
+      the mechanism several times.
+      If the mechanism changes to actually changing several slabs each time,
+      this check should be
+      if (s_cls->slabs < 1 + slab_rebal.num_slabs)
+    */
     if (s_cls->slabs < 2)
         no_go = -3;
 
@@ -476,8 +486,13 @@ static int slab_rebalance_start(void) {
         return no_go; /* Should use a wrapper function... */
     }
 
+    /*If controlling several slabs at once is supported, this should be
+      s_cls->killing = slab_rebal.num_slabs;
+    */
     s_cls->killing = 1;
+    --slab_rebal.num_slabs;
 
+    /*Can several slabs be supported at once?*/
     slab_rebal.slab_start = s_cls->slab_list[s_cls->killing - 1];
     slab_rebal.slab_end   = (char *)slab_rebal.slab_start +
         (s_cls->size * s_cls->perslab);
@@ -488,7 +503,7 @@ static int slab_rebalance_start(void) {
     slab_rebalance_signal = 2;
 
     if (settings.verbose > 1) {
-        fprintf(stderr, "Started a slab rebalance\n");
+        fprintf(stderr, "Started a slab %s\n",slab_rebal.d_clsid?"rebalance":"shrink");
     }
 
     pthread_mutex_unlock(&slabs_lock);
@@ -598,44 +613,72 @@ static int slab_rebalance_move(void) {
 static void slab_rebalance_finish(void) {
     slabclass_t *s_cls;
     slabclass_t *d_cls;
+    bool shrink=(slab_rebal.d_clsid==0);
 
     pthread_mutex_lock(&cache_lock);
     pthread_mutex_lock(&slabs_lock);
 
     s_cls = &slabclass[slab_rebal.s_clsid];
-    d_cls   = &slabclass[slab_rebal.d_clsid];
 
     /* At this point the stolen slab is completely clear */
     s_cls->slab_list[s_cls->killing - 1] =
         s_cls->slab_list[s_cls->slabs - 1];
     s_cls->slabs--;
     s_cls->killing = 0;
+    /* Todo: The slab_list array seems to be growing indefinatelly.
+       It should be re-alloced from time to time, if many slabs were shrunk or reassigned.*/
 
-    memset(slab_rebal.slab_start, 0, (size_t)settings.item_size_max);
+    if (shrink){
+        ((item *)(slab_rebal.slab_start))->slabs_clsid = 0;
+        if (mem_base==NULL){
+            free(slab_rebal.slab_start);
+            mem_malloced -= settings.item_size_max;
+        }
+    }else{
 
-    d_cls->slab_list[d_cls->slabs++] = slab_rebal.slab_start;
-    split_slab_page_into_freelist(slab_rebal.slab_start,
-        slab_rebal.d_clsid);
+        memset(slab_rebal.slab_start, 0, (size_t)settings.item_size_max);
 
-    slab_rebal.done       = 0;
-    slab_rebal.s_clsid    = 0;
-    slab_rebal.d_clsid    = 0;
+        d_cls   = &slabclass[slab_rebal.d_clsid];
+        d_cls->slab_list[d_cls->slabs++] = slab_rebal.slab_start;
+        split_slab_page_into_freelist(slab_rebal.slab_start,
+                                      slab_rebal.d_clsid);
+    }
+
+
+    if (slab_rebal.num_slabs){
+        /*we are not done yet, keep old data and go into another loop*/
+        slab_rebalance_signal = 1;
+        /*We do not have to set
+          slab_rebal.done       = 0;
+          because the next thing we do is set it to 0
+          in slab_rebalance_start
+          because we just set slab_rebalance_signal = 1;
+        */
+    }else{
+        slab_rebalance_signal = 0;
+        slab_rebal.done       = 0;
+        slab_rebal.s_clsid    = 0;
+        slab_rebal.d_clsid    = 0;
+
+    }
+
     slab_rebal.slab_start = NULL;
     slab_rebal.slab_end   = NULL;
     slab_rebal.slab_pos   = NULL;
-
-    slab_rebalance_signal = 0;
 
     pthread_mutex_unlock(&slabs_lock);
     pthread_mutex_unlock(&cache_lock);
 
     STATS_LOCK();
     stats.slab_reassign_running = false;
-    stats.slabs_moved++;
+    if (shrink)
+        stats.slabs_shrunk++;
+    else
+        stats.slabs_moved++;
     STATS_UNLOCK();
 
     if (settings.verbose > 1) {
-        fprintf(stderr, "finished a slab move\n");
+        fprintf(stderr, "Finished a slab %s\n",shrink?"shrink":"move");
     }
 }
 
@@ -712,13 +755,13 @@ static int slab_automove_decision(int *src, int *dst) {
  * go to sleep if locks are contended
  */
 static void *slab_maintenance_thread(void *arg) {
-    int src, dest;
+    int src, dest, num_slabs=1;/*temporary default value*/
 
     while (do_run_slab_thread) {
         if (settings.slab_automove == 1) {
             if (slab_automove_decision(&src, &dest) == 1) {
                 /* Blind to the return codes. It will retry on its own */
-                slabs_reassign(src, dest);
+                slabs_reassign(src, dest, num_slabs);
             }
             sleep(1);
         } else {
@@ -784,7 +827,7 @@ static int slabs_reassign_pick_any(int dst) {
     return -1;
 }
 
-static enum reassign_result_type do_slabs_reassign(int src, int dst) {
+static enum reassign_result_type do_slabs_reassign(int src, int dst, int num_slabs) {
     if (slab_rebalance_signal != 0)
         return REASSIGN_RUNNING;
 
@@ -798,14 +841,18 @@ static enum reassign_result_type do_slabs_reassign(int src, int dst) {
     }
 
     if (src < POWER_SMALLEST || src > power_largest ||
-        dst < POWER_SMALLEST || dst > power_largest)
+        (dst!=0 && (dst < POWER_SMALLEST || dst > power_largest)))
         return REASSIGN_BADCLASS;
 
-    if (slabclass[src].slabs < 2)
+    if (num_slabs < 1)
+        return REASSIGN_KILL_FEW;
+
+    if (slabclass[src].slabs < 1 + num_slabs)
         return REASSIGN_NOSPARE;
 
     slab_rebal.s_clsid = src;
     slab_rebal.d_clsid = dst;
+    slab_rebal.num_slabs = num_slabs;
 
     slab_rebalance_signal = 1;
     pthread_cond_signal(&slab_rebalance_cond);
@@ -813,12 +860,12 @@ static enum reassign_result_type do_slabs_reassign(int src, int dst) {
     return REASSIGN_OK;
 }
 
-enum reassign_result_type slabs_reassign(int src, int dst) {
+enum reassign_result_type slabs_reassign(int src, int dst, int num_slabs) {
     enum reassign_result_type ret;
     if (pthread_mutex_trylock(&slabs_rebalance_lock) != 0) {
         return REASSIGN_RUNNING;
     }
-    ret = do_slabs_reassign(src, dst);
+    ret = do_slabs_reassign(src, dst, num_slabs);
     pthread_mutex_unlock(&slabs_rebalance_lock);
     return ret;
 }
