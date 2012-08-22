@@ -266,6 +266,7 @@ struct stats {
     uint64_t      evicted_unfetched; /* items evicted but never touched */
     bool          slab_reassign_running; /* slab reassign in progress */
     uint64_t      slabs_moved;       /* times slabs were moved around */
+    uint64_t      slabs_shrunk;      /* times slabs were shrunk */
 };
 
 #define MAX_VERBOSITY_LEVEL 2
@@ -464,6 +465,7 @@ struct slab_rebalance {
     void *slab_pos;
     int s_clsid;
     int d_clsid;
+    unsigned int slabs_to_kill;
     int busy_items;
     uint8_t done;
 };

@@ -174,6 +174,7 @@ static void stats_init(void) {
     stats.hash_power_level = stats.hash_bytes = stats.hash_is_expanding = 0;
     stats.expired_unfetched = stats.evicted_unfetched = 0;
     stats.slabs_moved = 0;
+    stats.slabs_shrunk = 0;
     stats.accepting_conns = true; /* assuming we start in this state. */
     stats.slab_reassign_running = false;
 
@@ -2590,6 +2591,8 @@ static void server_stats(ADD_STAT add_stats, conn *c) {
     if (settings.slab_reassign) {
         APPEND_STAT("slab_reassign_running", "%u", stats.slab_reassign_running);
         APPEND_STAT("slabs_moved", "%llu", stats.slabs_moved);
+        APPEND_STAT("slabs_shrunk", "%llu", stats.slabs_shrunk);
+
     }
     STATS_UNLOCK();
 }
