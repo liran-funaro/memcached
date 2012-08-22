@@ -3238,11 +3238,23 @@ static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t 
         else
             out_string(c, "ERROR: Could not change memory to new value; Requested change is smaller than item_size_max (one slab)");
     }else{
-        if ( (!settings.slab_reassign) && newmaxbytes<settings.maxbytes)
-            out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
-        else
-            out_string(c, "OK");
 
+
+        if (newmaxbytes<settings.maxbytes) {
+            if (!settings.slab_reassign)
+                out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
+            else{
+                char tmp_string[100];
+                snprintf(tmp_string,sizeof(tmp_string),
+                         "OK: Will need to kill %ld slabs to reduce memory by %ld Mb",
+                         (settings.maxbytes-newmaxbytes)/settings.item_size_max,
+                         (settings.maxbytes-newmaxbytes)/ (1024 *1024));
+                out_string(c, tmp_string);
+            }
+        }else
+            out_string(c, "OK");/*Increasing memory limitation, nothing to check*/
+        
+        
         settings.maxbytes = newmaxbytes;
     }
     return;
