@@ -864,3 +864,18 @@ void stop_slab_maintenance_thread(void) {
     pthread_join(maintenance_tid, NULL);
     pthread_join(rebalance_tid, NULL);
 }
+
+
+int memory_shrink_expand(const size_t size) {
+    if (mem_base == NULL) {
+        /* We are not using a preallocated large memory chunk */
+        if (size<settings.item_size_max)
+            return 2;
+        pthread_mutex_lock(&slabs_lock);
+        mem_limit=size;
+        pthread_mutex_unlock(&slabs_lock);
+        return 0;
+    } else {
+        return 1;
+    }
+}

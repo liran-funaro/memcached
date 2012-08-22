@@ -3220,6 +3220,35 @@ static void process_slabs_automove_command(conn *c, token_t *tokens, const size_
     return;
 }
 
+
+static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t ntokens) {
+    unsigned long int newmaxbytes;
+    int ret;
+
+    assert(c != NULL);
+
+    set_noreply_maybe(c, tokens, ntokens);
+
+    newmaxbytes=strtol(tokens[COMMAND_TOKEN+1].value, NULL, 10) *1024 * 1024;
+
+
+    if ((ret=memory_shrink_expand(newmaxbytes))){
+        if (ret==1)
+            out_string(c, "ERROR: Could not change memory to new value; Using a preallocated memory chunk, memory cannot be changed at run time.");
+        else
+            out_string(c, "ERROR: Could not change memory to new value; Requested change is smaller than item_size_max (one slab)");
+    }else{
+        if ( (!settings.slab_reassign) && newmaxbytes<settings.maxbytes)
+            out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
+        else
+            out_string(c, "OK");
+
+        settings.maxbytes = newmaxbytes;
+    }
+    return;
+}
+
+
 static void process_command(conn *c, char *command) {
 
     token_t tokens[MAX_TOKENS];
@@ -3376,6 +3405,8 @@ static void process_command(conn *c, char *command) {
         } else {
             out_string(c, "ERROR");
         }
+    } else if (ntokens == 3  && (strcmp(tokens[COMMAND_TOKEN].value, "m") == 0)) {
+        process_maxmegabytes_command(c, tokens, ntokens);
     } else if ((ntokens == 3 || ntokens == 4) && (strcmp(tokens[COMMAND_TOKEN].value, "verbosity") == 0)) {
         process_verbosity_command(c, tokens, ntokens);
     } else {

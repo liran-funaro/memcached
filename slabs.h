@@ -43,4 +43,6 @@ enum reassign_result_type {
 
 enum reassign_result_type slabs_reassign(int src, int dst);
 
+/** Actually process the change of maxbytes*/
+int memory_shrink_expand(const size_t size);
 #endif
