@@ -864,7 +864,7 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
  * go to sleep if locks are contended
  */
 static void *slab_maintenance_thread(void *arg) {
-    int src, dest, num_slabs=1;/*temporary default value*/
+    int src, dest, num_slabs;
 
     while (do_run_slab_thread) {
 

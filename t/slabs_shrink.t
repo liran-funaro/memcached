@@ -7,12 +7,16 @@ use FindBin qw($Bin);
 use lib "$Bin/lib";
 use MemcachedTest;
 
+
+
+my $automove_level;
+for $automove_level (0..2) {
 # Enable manual slab reassign, cap at 6 slabs
-#default in port 11211
-my $server = new_memcached('-v 1 -o slab_reassign -o slab_automove=2 -m 6');
+#default is port 11211
+my $server = new_memcached('-v 1 -o slab_reassign -o slab_automove='.$automove_level.' -m 6');
 my $stats = mem_stats($server->sock, ' settings');
 is($stats->{slab_reassign}, "yes");
-is($stats->{slab_automove}, "2");
+is($stats->{slab_automove}, "$automove_level");
 isnt($stats->{verbose}, 0, "verbose is not 0");
 
 my $sock = $server->sock;
@@ -41,7 +45,11 @@ print $sock "m 2\r\n";
 is(scalar <$sock>, "OK: Will need to kill 4 slabs to reduce memory by 4 Mb\r\n", "slab shrink was ordered");
 
 # Still working out how/if to signal the thread. For now, just sleep.
-sleep 5;
+if ($automove_level==2){
+  sleep 2;
+}else{
+  sleep 40;#At least 30 seconds are needed for a full lazy evaluation.
+}
 
 # Check that stats counters increased
 my $slabs_after = mem_stats($sock, "slabs");
@@ -87,5 +95,5 @@ my $slabs_after_expand = mem_stats($sock, "slabs");
 ok($slabs_after_expand->{"31:total_pages"} >
    $slabs_after->{"31:total_pages"} ,
     "slab 31 pagecount increased - using the increased memory limit");
-
+}
 # Do need to come up with better automated tests for this.
