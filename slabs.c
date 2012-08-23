@@ -8,6 +8,7 @@
  * memcached protocol.
  */
 #include "memcached.h"
+#include <limits.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/signal.h>
@@ -682,28 +683,52 @@ static void slab_rebalance_finish(void) {
     }
 }
 
-/* Return 1 means a decision was reached.
+/**Divide integers and get the ceiling value,
+   without linking to the math lib and converting to floating point operations.*/
+static int ceil_divide(const int a, const int b){
+    int ret=a/b;
+    if (ret * b <a)
+        ++ret;
+    return ret;
+}
+
+
+#define DECISION_SECONDS_SHORT 1
+#define DECISION_SECONDS_LONG 10
+/** Return 1 means a decision was reached for the source.
+ * Return 2 menas a decision was reached for a destination as well.
+ * Return 0 if no decision was made.
  * Move to its own thread (created/destroyed as needed) once automover is more
  * complex.
  */
-static int slab_automove_decision(int *src, int *dst) {
+static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
+                                  const bool shrink_now) {
     static uint64_t evicted_old[POWER_LARGEST];
+
+    /*Record the number of consecutive times
+      in which a slab had zero evictions*/
     static unsigned int slab_zeroes[POWER_LARGEST];
     static unsigned int slab_winner = 0;
     static unsigned int slab_wins   = 0;
     uint64_t evicted_new[POWER_LARGEST];
-    uint64_t evicted_diff = 0;
+    uint64_t evicted_diff[POWER_LARGEST];
     uint64_t evicted_max  = 0;
+    uint64_t evicted_min  = ULONG_MAX;
     unsigned int highest_slab = 0;
     unsigned int total_pages[POWER_LARGEST];
     int i;
     int source = 0;
+    int emergency_source = 0;
     int dest = 0;
     static rel_time_t next_run;
 
     /* Run less frequently than the slabmove tester. */
     if (current_time >= next_run) {
         next_run = current_time + 10;
+        int decision_seconds=(settings.slab_automove>1)?
+            DECISION_SECONDS_SHORT:DECISION_SECONDS_LONG;
+        next_run = current_time + decision_seconds;
+
     } else {
         return 0;
     }
@@ -715,39 +740,123 @@ static int slab_automove_decision(int *src, int *dst) {
     }
     pthread_mutex_unlock(&cache_lock);
 
-    /* Find a candidate source; something with zero evicts 3+ times */
+    /* Find a candidate source; something with zero evicts 3+ times.
+       This algorithm prefers larger powers as a source.  */
     for (i = POWER_SMALLEST; i < power_largest; i++) {
-        evicted_diff = evicted_new[i] - evicted_old[i];
-        if (evicted_diff == 0 && total_pages[i] > 2) {
+        evicted_diff[i] = evicted_new[i] - evicted_old[i];
+        if (evicted_diff[i] == 0 && total_pages[i] > 2) {
             slab_zeroes[i]++;
             if (source == 0 && slab_zeroes[i] >= 3)
                 source = i;
-        } else {
+        } else {/*Search for the best destination according
+                  to the current statistics*/
             slab_zeroes[i] = 0;
-            if (evicted_diff > evicted_max) {
-                evicted_max = evicted_diff;
+            if (evicted_diff[i] > evicted_max) {
+                evicted_max = evicted_diff[i];
                 highest_slab = i;
             }
         }
+
+        if (settings.verbose > 2 && total_pages[i]) {
+            fprintf(stderr,
+                    "total pages: slab class %d diff %ld slabs %d\n",
+                    i,(long int)evicted_diff[i],total_pages[i]);
+        }
+
+
+        /*prepare an emergency source for the aggressive mode*/
+        if ((settings.slab_automove>1) &&
+            evicted_diff[i] < evicted_min && (total_pages[i] >= 2)){
+            /*We verify that there are enough slabs in the emergency source,
+              otherwise we don't have anything to take from.
+              If we wait to slab_reassign with this check we might hit a neverending loop.*/
+            evicted_min=evicted_diff[i];
+            emergency_source=i;
+        }
+
         evicted_old[i] = evicted_new[i];
     }
 
-    /* Pick a valid destination */
+    /* Pick a valid destination: a destination which won 3 times in a row */
     if (slab_winner != 0 && slab_winner == highest_slab) {
         slab_wins++;
-        if (slab_wins >= 3)
+        if ((!shrink_now) && (slab_wins >= 3))
             dest = slab_winner;
     } else {
         slab_wins = 1;
         slab_winner = highest_slab;
     }
 
-    if (source && dest) {
+
+    if ((settings.slab_automove>1) && !source)
+        source=emergency_source;
+
+    if (source){/*Decide on num_slabs, currently only for shrinkage*/
+        long int mem_gap=mem_malloced-mem_limit;
+
+
+        if (mem_gap==0){
+            /*Not shrinking. just moving*/
+            *num_slabs=1;
+        }else{
+            /*To hasten the process, this variable can be increased,
+              and then there will be less repeating attempts to balance
+              the shrinkage across slab classes*/
+            const int minimal_size_for_one_go=1;
+            uint slabs_gap=ceil_divide(mem_gap,settings.item_size_max);
+            if (slabs_gap<=minimal_size_for_one_go)
+                *num_slabs=slabs_gap;
+            else{
+
+                /*Count the active slab classes, to compute the minimal number of
+                  slabs that will be taken from the leading candidate*/
+                unsigned int number_of_active_slab_classes=0;
+                for (i = POWER_SMALLEST; i < power_largest; i++) {
+                    if (total_pages[i] >0)
+                        ++number_of_active_slab_classes;
+                }
+
+                /*Compute a conservative bound on the number of slabs to kill
+                  from the first class candidate.
+                  If all active slab classes are to donate an equal share,
+                  this would be it. If one class is a better candidate, then we got it now.
+                  Next time we will check again who is a good candidate after we took from
+                  the best candidate at least its even share*/
+
+                *num_slabs=ceil_divide(slabs_gap, number_of_active_slab_classes);
+                if (number_of_active_slab_classes * *num_slabs < slabs_gap)
+                    ++ *num_slabs; /*round up - better lose a bit too much from
+                                     the first class than drag the process long*/
+
+                /*Yet, we will not leave the source slab with less than one slab.
+                  This criterion can be fastened, as the distribution of
+                  slabs may change over time, and an old slab class can be
+                  no longer needed.*/
+
+                if (total_pages[source]-*num_slabs <1)
+                    *num_slabs= total_pages[source]-1;
+
+
+            }
+        }
+
+        /*return values*/
         *src = source;
         *dst = dest;
-        return 1;
-    }
+        if (dest)
+            return 2;
+        else
+            return 1;
+    }else
+        /*By now, if we got no source, then we do not have any class
+          with at least two pages, which means the reassignment will
+          fail if we use it (unless there is a mechanism to completely
+          clearing a class of slabs*/
+
+        *num_slabs=0;/*Not killing slabs if we do not have a source*/
+
     return 0;
+
 }
 
 /* Slab rebalancer thread.
@@ -758,12 +867,35 @@ static void *slab_maintenance_thread(void *arg) {
     int src, dest, num_slabs=1;/*temporary default value*/
 
     while (do_run_slab_thread) {
-        if (settings.slab_automove == 1) {
-            if (slab_automove_decision(&src, &dest) == 1) {
-                /* Blind to the return codes. It will retry on its own */
+
+
+        if (settings.slab_automove) {
+
+            bool shrink_now= mem_limit &&  (mem_malloced > mem_limit);
+            int decision=slab_automove_decision
+                (&src, &dest, &num_slabs, shrink_now);
+            /* Blind to the return codes. It will retry on its own */
+
+
+            /*Give precedence to shrinkage over moving*/
+            if (shrink_now && decision > 0) {
+                /*We do not pass dest here, but rather 0,
+                  so that even if a destination was found,
+                  shrinkage will happen*/
+                slabs_reassign(src, 0, num_slabs);
+
+            }else if (decision == 2) {
+                /*Only automove memory when no shrinkage is required,
+                  and a pair was found*/
+                /*Todo - in angry birds mode, pass a negative src
+                  if src was not found ? Or do we cover this in the decision taking?*/
+
                 slabs_reassign(src, dest, num_slabs);
             }
-            sleep(1);
+
+            sleep(DECISION_SECONDS_SHORT);/*It does not have to be the same as in
+                                            automove_decision,
+                                            but it was probably meant to be no less*/
         } else {
             /* Don't wake as often if we're not enabled.
              * This is lazier than setting up a condition right now. */

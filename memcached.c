@@ -5051,7 +5051,7 @@ int main (int argc, char **argv) {
                 }
                 settings.slab_automove = atoi(subopts_value);
                 if (settings.slab_automove < 0 || settings.slab_automove > 2) {
-                    fprintf(stderr, "slab_automove must be between 0 and 2\n");
+                    fprintf(stderr, "slab_automove valid values are: 0 inactive 1 easygoing 2 aggressive (angry birds mode.)\n");
                     return 1;
                 }
                 break;
