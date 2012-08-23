@@ -9,9 +9,10 @@ use MemcachedTest;
 
 # Enable manual slab reassign, cap at 6 slabs
 #default in port 11211
-my $server = new_memcached('-v -o slab_reassign -m 6');
+my $server = new_memcached('-v 1 -o slab_reassign -o slab_automove=2 -m 6');
 my $stats = mem_stats($server->sock, ' settings');
 is($stats->{slab_reassign}, "yes");
+is($stats->{slab_automove}, "2");
 isnt($stats->{verbose}, 0, "verbose is not 0");
 
 my $sock = $server->sock;

@@ -868,10 +868,10 @@ static void *slab_maintenance_thread(void *arg) {
 
     while (do_run_slab_thread) {
 
+        bool shrink_now= mem_limit &&  (mem_malloced > mem_limit);
 
-        if (settings.slab_automove) {
+        if (settings.slab_automove || shrink_now) {
 
-            bool shrink_now= mem_limit &&  (mem_malloced > mem_limit);
             int decision=slab_automove_decision
                 (&src, &dest, &num_slabs, shrink_now);
             /* Blind to the return codes. It will retry on its own */
