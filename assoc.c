@@ -24,6 +24,8 @@
 #include <string.h>
 #include <assert.h>
 #include <pthread.h>
+#include "slabs.h"
+#include "assoc.h"
 
 static pthread_cond_t maintenance_cond = PTHREAD_COND_INITIALIZER;
 
@@ -58,6 +60,10 @@ static bool expanding = false;
  */
 static unsigned int expand_bucket = 0;
 
+int tell_hashsize(void){
+    return stats.hash_bytes;
+}
+
 void assoc_init(const int hashtable_init) {
     if (hashtable_init) {
         hashpower = hashtable_init;
@@ -79,9 +85,9 @@ item *assoc_find(const char *key, const size_t nkey, const uint32_t hv) {
 
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
-    {
-        it = old_hashtable[oldbucket];
-    } else {
+        {
+            it = old_hashtable[oldbucket];
+        } else {
         it = primary_hashtable[hv & hashmask(hashpower)];
     }
 
@@ -147,14 +153,14 @@ static void assoc_expand(void) {
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
-//    assert(assoc_find(ITEM_key(it), it->nkey) == 0);  /* shouldn't have duplicately named things defined */
+    //    assert(assoc_find(ITEM_key(it), it->nkey) == 0);  /* shouldn't have duplicately named things defined */
 
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
-    {
-        it->h_next = old_hashtable[oldbucket];
-        old_hashtable[oldbucket] = it;
-    } else {
+        {
+            it->h_next = old_hashtable[oldbucket];
+            old_hashtable[oldbucket] = it;
+        } else {
         it->h_next = primary_hashtable[hv & hashmask(hashpower)];
         primary_hashtable[hv & hashmask(hashpower)] = it;
     }
@@ -183,7 +189,7 @@ void assoc_delete(const char *key, const size_t nkey, const uint32_t hv) {
         *before = nxt;
         return;
     }
-    /* Note:  we never actually get here.  the callers don't delete things
+    /* Note:  we never actually get here.  The callers don't delete things
        they can't find. */
     assert(*before != 0);
 }
