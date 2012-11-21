@@ -3231,31 +3231,33 @@ static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t 
 
     newmaxbytes=strtol(tokens[COMMAND_TOKEN+1].value, NULL, 10) *1024 * 1024;
 
+    ret=memory_shrink_expand(newmaxbytes);
+    switch (ret){
+    case -1:
+        out_string(c, "ERROR: Could not change memory to new value; Using a preallocated memory chunk, memory cannot be changed at run time.");
+        break;
+    case -2:
+        out_string(c, "ERROR: Could not change memory to new value; Requested change is smaller than item_size_max (one slab)");
+        break;
+    default:
+        {
+            if (newmaxbytes<settings.maxbytes) {
+                if (!settings.slab_reassign)
+                    out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
+                else{
+                    char tmp_string[100];
+                    snprintf(tmp_string,sizeof(tmp_string),
+                             "OK: Will need to kill %d slabs to reduce " \
+                             "memory limit by %ld Mb",ret,
+                             (settings.maxbytes-newmaxbytes)/ (1024 *1024));
+                    out_string(c, tmp_string);
+                }
+            }else/*ret==0*/
+                out_string(c, "OK");/*Increasing memory limitation, nothing to check*/
 
-    if ((ret=memory_shrink_expand(newmaxbytes))){
-        if (ret==1)
-            out_string(c, "ERROR: Could not change memory to new value; Using a preallocated memory chunk, memory cannot be changed at run time.");
-        else
-            out_string(c, "ERROR: Could not change memory to new value; Requested change is smaller than item_size_max (one slab)");
-    }else{
 
-
-        if (newmaxbytes<settings.maxbytes) {
-            if (!settings.slab_reassign)
-                out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
-            else{
-                char tmp_string[100];
-                snprintf(tmp_string,sizeof(tmp_string),
-                         "OK: Will need to kill %ld slabs to reduce memory by %ld Mb",
-                         (settings.maxbytes-newmaxbytes)/settings.item_size_max,
-                         (settings.maxbytes-newmaxbytes)/ (1024 *1024));
-                out_string(c, tmp_string);
-            }
-        }else
-            out_string(c, "OK");/*Increasing memory limitation, nothing to check*/
-
-
-        settings.maxbytes = newmaxbytes;
+            settings.maxbytes = newmaxbytes;/*note that this does not set mem_limit*/
+        }
     }
     return;
 }

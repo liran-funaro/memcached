@@ -8,6 +8,7 @@
  * memcached protocol.
  */
 #include "memcached.h"
+#include <malloc.h>
 #include <limits.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -21,6 +22,7 @@
 #include <string.h>
 #include <assert.h>
 #include <pthread.h>
+#include "slabs.h"
 
 /* powers-of-N allocation structures */
 
@@ -43,6 +45,7 @@ typedef struct {
 static slabclass_t slabclass[MAX_NUMBER_OF_SLAB_CLASSES];
 static size_t mem_limit = 0;
 static size_t mem_malloced = 0;
+static size_t mem_malloced_slablist = 0;
 static int power_largest;
 
 static void *mem_base = NULL;
@@ -70,6 +73,15 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id);
    smaller ones will be made.  */
 static void slabs_preallocate (const unsigned int maxslabs);
 
+/*If we want to make the accounting more global,
+  we need to add more memory counters here.
+  The current accounting policy is to count many things,
+  but only reduce the number of slabs.
+  The hash table might also requireshrinkage, but it should be
+  of small consequence.
+*/
+#define TOTAL_MALLOCED (mem_malloced+mem_malloced_slablist+tell_hashsize())
+
 /*
  * Figures out which slab class (chunk size) is required to store an item of
  * a given size.
@@ -77,6 +89,35 @@ static void slabs_preallocate (const unsigned int maxslabs);
  * Given object size, return id to use when allocating/freeing memory for object
  * 0 means error: can't store such a large object
  */
+
+
+/**For debugging memory allocations*/
+#undef DEBUG_SLABS
+#ifdef DEBUG_SLABS
+static uint print_counter h= 0 ;
+#endif
+static void print_statm(const char * const str){
+#ifdef DEBUG_SLABS
+    uint pid=getpid();
+    char sys_str[500];
+    fprintf(stderr,"%u:%s\n",(uint)pthread_self(),str);
+    //fprintf(stderr,"gdb memcached-debug %d\n",pid);
+    snprintf(sys_str,sizeof(sys_str),"echo statm `cat /proc/%d/statm`",pid);
+    if (-1==system(sys_str))
+      fprintf(stderr,"statm failed\n");
+    malloc_stats();
+    fprintf (stderr,
+             "%umalloced %u limit %u slablist %u hash %u total %u\n",
+             ++print_counter,
+             (uint)mem_malloced,(uint)mem_limit,(uint)mem_malloced_slablist,
+             tell_hashsize(),(uint)TOTAL_MALLOCED);
+
+#else
+    (void)str;
+#endif
+    return;
+}
+
 
 unsigned int slabs_clsid(const size_t size) {
     int res = POWER_SMALLEST;
@@ -101,7 +142,9 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc) {
 
     if (prealloc) {
         /* Allocate everything in a big chunk with malloc */
+        print_statm("before init");
         mem_base = malloc(mem_limit);
+        print_statm("after init");
         if (mem_base != NULL) {
             mem_current = mem_base;
             mem_avail = mem_limit;
@@ -174,14 +217,25 @@ static void slabs_preallocate (const unsigned int maxslabs) {
 
 static int grow_slab_list (const unsigned int id) {
     slabclass_t *p = &slabclass[id];
+    print_statm("before grow");
+
     if (p->slabs == p->list_size) {
         size_t new_size =  (p->list_size != 0) ? p->list_size * 2 : 16;
-        void *new_list = realloc(p->slab_list, new_size * sizeof(void *));
-        if (new_list == 0) return 0;
-        /*For accurate memory accounting, pointer sizes must also be ccounted*/
-        mem_malloced+=(new_size-p->list_size)* sizeof(void *);
-        p->list_size = new_size;
-        p->slab_list = new_list;
+        size_t required_addition=(new_size-p->list_size)* sizeof(void *);
+        int not_enough_mem=mem_limit &&
+            ((TOTAL_MALLOCED + required_addition) > mem_limit) &&
+            (p->slabs > 0);
+        if (not_enough_mem)
+            return 0;
+        else{
+            void *new_list = realloc(p->slab_list, new_size * sizeof(void *));
+            if (new_list == 0) return 0;
+            /*For accurate memory accounting, pointer sizes must also be counted*/
+            mem_malloced_slablist+=required_addition;
+            print_statm("after grow");
+            p->list_size = new_size;
+            p->slab_list = new_list;
+        }
     }
     return 1;
 }
@@ -201,13 +255,33 @@ static int do_slabs_newslab(const unsigned int id) {
         : p->size * p->perslab;
     char *ptr;
 
-    if ((mem_limit && mem_malloced + len > mem_limit && p->slabs > 0) ||
-        (grow_slab_list(id) == 0) ||
+    /*mem_limit>0 means we have a memory limitation.
+      Only in this case we check that if we allocate the slab, we do not go over the top.
+      p->slabs>0 if we already have some slabs of this class.
+      Otherwise, we allocate anyhow to the class because it is the first one.
+      If automove is active, this may make us go over the top. In this case
+      shrinkage will be activated*/
+    /*Thus is a tentative evaluation, because we don't know
+      yet if we would need to grow the slab list*/
+    int not_enough_mem=(mem_limit &&
+                        (TOTAL_MALLOCED + len > mem_limit) &&
+                        p->slabs > 0);
+
+    int grow_slab_list_failed=not_enough_mem?1:(grow_slab_list(id) == 0);
+    /*re-evaluate because the list might have grown*/
+    if (!grow_slab_list_failed)
+        not_enough_mem=(mem_limit &&
+                        ((TOTAL_MALLOCED + len) > mem_limit) &&
+                        p->slabs > 0);
+
+    if (not_enough_mem ||
+        (grow_slab_list_failed) ||
         ((ptr = memory_allocate((size_t)len)) == 0)) {
 
         MEMCACHED_SLABS_SLABCLASS_ALLOCATE_FAILED(id);
         return 0;
     }
+
 
     memset(ptr, 0, (size_t)len);
     split_slab_page_into_freelist(ptr, id);
@@ -277,6 +351,7 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
 
     p->sl_curr++;
     p->requested -= size;
+    print_statm("in slabs free, just catching other stuff");
     return;
 }
 
@@ -377,10 +452,12 @@ static void *memory_allocate(size_t size) {
     void *ret;
 
     if (mem_base == NULL) {
+        print_statm("before memory allocate");
         /* We are not using a preallocated large memory chunk */
         ret = malloc(size);
         if (ret)
             mem_malloced+=size;
+        print_statm("after memory allocate");
 
     } else {
         ret = mem_current;
@@ -631,9 +708,11 @@ static void slab_rebalance_finish(void) {
 
     if (shrink){
         ((item *)(slab_rebal.slab_start))->slabs_clsid = 0;
+        print_statm("before shrink");
         if (mem_base==NULL){
             free(slab_rebal.slab_start);
             mem_malloced -= settings.item_size_max;
+        print_statm("after shrink");
         }
     }else{
 
@@ -770,8 +849,22 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
             /*We verify that there are enough slabs in the emergency source,
               otherwise we don't have anything to take from.
               If we wait to slab_reassign with this check we might hit a neverending loop.*/
-            evicted_min=evicted_diff[i];
-            emergency_source=i;
+
+            /*The evicted diff statistic may be misguiding
+              where the statistic is checked too often,
+              so we allow a tie breaker. this is not pure logic -
+              one can insert any kind of
+              weight function over total_pages and evicted_diff.*/
+            if (emergency_source==0 ||
+                ( evicted_diff[i] < evicted_min) ||
+                ( /*evicted diff is equal and*/ total_pages[i] >total_pages[emergency_source])){
+                evicted_min=evicted_diff[i];
+                if (shrink_now)
+                    fprintf(stderr,"emergency source changed from %d to %d\n",
+                            emergency_source,i);
+                emergency_source=i;
+            }
+
         }
 
         evicted_old[i] = evicted_new[i];
@@ -792,10 +885,10 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
         source=emergency_source;
 
     if (source){/*Decide on num_slabs, currently only for shrinkage*/
-        long int mem_gap=mem_malloced-mem_limit;
+        long int mem_gap=TOTAL_MALLOCED-mem_limit;
 
 
-        if (mem_gap==0){
+        if (mem_gap<=0){
             /*Not shrinking. just moving*/
             *num_slabs=1;
         }else{
@@ -812,7 +905,7 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
                   slabs that will be taken from the leading candidate*/
                 unsigned int number_of_active_slab_classes=0;
                 for (i = POWER_SMALLEST; i < power_largest; i++) {
-                    if (total_pages[i] >0)
+                    if (total_pages[i] >1)/*only those that are eligible*/
                         ++number_of_active_slab_classes;
                 }
 
@@ -833,7 +926,7 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
                   slabs may change over time, and an old slab class can be
                   no longer needed.*/
 
-                if (total_pages[source]-*num_slabs <1)
+                if (total_pages[source]-1 <*num_slabs)
                     *num_slabs= total_pages[source]-1;
 
 
@@ -868,14 +961,13 @@ static void *slab_maintenance_thread(void *arg) {
 
     while (do_run_slab_thread) {
 
-        bool shrink_now= mem_limit &&  (mem_malloced > mem_limit);
+        bool shrink_now= mem_limit &&  (TOTAL_MALLOCED> mem_limit);
 
         if (settings.slab_automove || shrink_now) {
 
             int decision=slab_automove_decision
                 (&src, &dest, &num_slabs, shrink_now);
             /* Blind to the return codes. It will retry on its own */
-
 
             /*Give precedence to shrinkage over moving*/
             if (shrink_now && decision > 0) {
@@ -1048,17 +1140,27 @@ void stop_slab_maintenance_thread(void) {
     pthread_join(rebalance_tid, NULL);
 }
 
+/**\return -2 when the requested amount is less than one slab.
+   \return -1 when memory is inflexible because it was
+   allocated as a single chunk.
+   \return non-negative value as the number of slabs that need to be killed to reach this size.*/
 
 int memory_shrink_expand(const size_t size) {
     if (mem_base == NULL) {
+        int gap=TOTAL_MALLOCED-size;
         /* We are not using a preallocated large memory chunk */
         if (size<settings.item_size_max)
-            return 2;
+            return -2;
         pthread_mutex_lock(&slabs_lock);
-        mem_limit=size;
+        mem_limit=size;/*note that this does not set settings.maxbytes*/
         pthread_mutex_unlock(&slabs_lock);
-        return 0;
+
+        if (gap>0)
+            return ceil_divide(gap,settings.item_size_max);
+        else
+            return 0;
+
     } else {
-        return 1;
+        return -1;
     }
 }
