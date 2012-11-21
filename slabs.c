@@ -92,9 +92,10 @@ static void slabs_preallocate (const unsigned int maxslabs);
 
 
 /**For debugging memory allocations*/
+//#define DEBUG_SLABS
 #undef DEBUG_SLABS
 #ifdef DEBUG_SLABS
-static uint print_counter h= 0 ;
+static uint print_counter= 0 ;
 #endif
 static void print_statm(const char * const str){
 #ifdef DEBUG_SLABS
@@ -1146,8 +1147,10 @@ void stop_slab_maintenance_thread(void) {
    \return non-negative value as the number of slabs that need to be killed to reach this size.*/
 
 int memory_shrink_expand(const size_t size) {
+    print_statm("shrink_expand command");
     if (mem_base == NULL) {
         int gap=TOTAL_MALLOCED-size;
+        int old =mem_limit;
         /* We are not using a preallocated large memory chunk */
         if (size<settings.item_size_max)
             return -2;
@@ -1155,9 +1158,12 @@ int memory_shrink_expand(const size_t size) {
         mem_limit=size;/*note that this does not set settings.maxbytes*/
         pthread_mutex_unlock(&slabs_lock);
 
-        if (gap>0)
-            return ceil_divide(gap,settings.item_size_max);
-        else
+        if (gap>0){
+            int forgap=ceil_divide(gap,settings.item_size_max);
+            fprintf(stderr,"gap %d for gap %d to reach from %d to %d when currently using %d\n",
+                    gap,forgap,old,(int)size,(int)TOTAL_MALLOCED);
+            return forgap;
+        }else
             return 0;
 
     } else {
