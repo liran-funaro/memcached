@@ -712,6 +712,7 @@ static void slab_rebalance_finish(void) {
         print_statm("before shrink");
         if (mem_base==NULL){
             free(slab_rebal.slab_start);
+            malloc_trim(settings.item_size_max);
             mem_malloced -= settings.item_size_max;
         print_statm("after shrink");
         }
