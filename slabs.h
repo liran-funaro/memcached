@@ -8,6 +8,14 @@
     3rd argument specifies if the slab allocator should allocate all memory
     up front (if true), or allocate memory in chunks as it is needed (if false)
 */
+
+
+#include <stdlib.h>
+
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "memcached.h"
 void slabs_init(const size_t limit, const double factor, const bool prealloc);
 
 
@@ -56,4 +64,5 @@ enum reassign_result_type slabs_reassign(int src, int dst, int num_slabs);
 
 /** Actually process the change of maxbytes*/
 int memory_shrink_expand(const size_t size);
+
 #endif
