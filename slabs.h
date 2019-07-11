@@ -19,6 +19,8 @@
 void slabs_init(const size_t limit, const double factor, const bool prealloc);
 
 
+#define TO_MB(mem) ((double)(mem) / (double)(1UL<<20))
+
 /**
  * Given object size, return id to use when allocating/freeing memory for object
  * 0 means error: can't store such a large object
@@ -63,6 +65,6 @@ enum reassign_result_type {
 enum reassign_result_type slabs_reassign(int src, int dst, int num_slabs);
 
 /** Actually process the change of maxbytes*/
-int memory_shrink_expand(const size_t size);
+long long memory_shrink_expand(const size_t new_mem_limit);
 
 #endif

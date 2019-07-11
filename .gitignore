@@ -39,3 +39,8 @@ doc/protocol-binary.txt
 /timedrun
 /doc/doxy
 /memcached.spec
+
+# Eclipse files
+.project
+.cproject
+.settings

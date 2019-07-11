@@ -3222,42 +3222,42 @@ static void process_slabs_automove_command(conn *c, token_t *tokens, const size_
 
 
 static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t ntokens) {
-    unsigned long int newmaxbytes;
-    int ret;
-
     assert(c != NULL);
 
     set_noreply_maybe(c, tokens, ntokens);
 
-    newmaxbytes=strtol(tokens[COMMAND_TOKEN+1].value, NULL, 10) *1024 * 1024;
+    unsigned long newmaxbytes = (unsigned long) strtol(tokens[COMMAND_TOKEN + 1].value,
+            NULL, 10) * (1UL << 20);
 
-    ret=memory_shrink_expand(newmaxbytes);
-    switch (ret){
+    long long ret = memory_shrink_expand(newmaxbytes);
+    switch (ret) {
     case -1:
-        out_string(c, "ERROR: Could not change memory to new value; Using a preallocated memory chunk, memory cannot be changed at run time.");
+        out_string(c, "ERROR: Could not change memory to new value; "
+                "Using a preallocated memory chunk, memory cannot be changed at run time.");
         break;
     case -2:
-        out_string(c, "ERROR: Could not change memory to new value; Requested change is smaller than item_size_max (one slab)");
+        out_string(c, "ERROR: Could not change memory to new value; "
+                "Requested change is smaller than item_size_max (one slab)");
         break;
-    default:
-        {
-            if (newmaxbytes<settings.maxbytes) {
-                if (!settings.slab_reassign)
-                    out_string(c, "WARNING: slab reassign is not enabled. If memory is already in use, it will not be freed, though memory growth will be limited by the new limit.");
-                else{
-                    char tmp_string[100];
-                    snprintf(tmp_string,sizeof(tmp_string),
-                             "OK: Will need to kill %d slabs to reduce " \
-                             "memory limit by %ld Mb",ret,
-                             (settings.maxbytes-newmaxbytes)/ (1024 *1024));
-                    out_string(c, tmp_string);
-                }
-            }else/*ret==0*/
-                out_string(c, "OK");/*Increasing memory limitation, nothing to check*/
+    default: {
+        if (newmaxbytes < settings.maxbytes) {
+            if (!settings.slab_reassign)
+                out_string(c, "WARNING: slab reassign is not enabled."
+                        "If memory is already in use, it will not be freed, "
+                        "though memory growth will be limited by the new limit.");
+            else {
+                char tmp_string[100];
+                snprintf(tmp_string, sizeof(tmp_string),
+                        "OK: Will need to kill %lld slabs to reduce "
+                                "memory limit by %.2f MB", ret,
+                        TO_MB(settings.maxbytes - newmaxbytes));
+                out_string(c, tmp_string);
+            }
+        } else /*ret==0*/
+            out_string(c, "OK"); /*Increasing memory limitation, nothing to check*/
 
-
-            settings.maxbytes = newmaxbytes;/*note that this does not set mem_limit*/
-        }
+        settings.maxbytes = newmaxbytes; /*note that this does not set mem_limit*/
+    }
     }
     return;
 }
@@ -4807,7 +4807,8 @@ int main (int argc, char **argv) {
     /* init settings */
     settings_init();
 
-    /* set stderr non-buffering (for running under, say, daemontools) */
+    /* set stdout and stderr non-buffering (for running under, say, daemontools) */
+    setbuf(stdout, NULL);
     setbuf(stderr, NULL);
 
     /* process arguments */

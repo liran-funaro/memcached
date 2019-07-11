@@ -22,6 +22,7 @@
 #include <string.h>
 #include <assert.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include "slabs.h"
 
 /* powers-of-N allocation structures */
@@ -766,11 +767,8 @@ static void slab_rebalance_finish(void) {
 
 /**Divide integers and get the ceiling value,
    without linking to the math lib and converting to floating point operations.*/
-static int ceil_divide(const int a, const int b){
-    int ret=a/b;
-    if (ret * b <a)
-        ++ret;
-    return ret;
+static unsigned long long ceil_divide(const unsigned long long a, const unsigned long long b) {
+    return (a + b - 1) / b;
 }
 
 
@@ -861,9 +859,11 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
                 ( evicted_diff[i] < evicted_min) ||
                 ( /*evicted diff is equal and*/ total_pages[i] >total_pages[emergency_source])){
                 evicted_min=evicted_diff[i];
-                if (shrink_now)
-                    fprintf(stderr,"emergency source changed from %d to %d\n",
-                            emergency_source,i);
+                if (shrink_now) {
+                    fprintf(stdout, "emergency source changed from %d to %d\n",
+                            emergency_source, i);
+                    fflush(stdout);
+                }
                 emergency_source=i;
             }
 
@@ -887,51 +887,49 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
         source=emergency_source;
 
     if (source){/*Decide on num_slabs, currently only for shrinkage*/
-        long int mem_gap=TOTAL_MALLOCED-mem_limit;
+    	unsigned long long total = TOTAL_MALLOCED;
 
-
-        if (mem_gap<=0){
-            /*Not shrinking. just moving*/
-            *num_slabs=1;
-        }else{
+        if (total <= mem_limit) {
+			/*Not shrinking. just moving*/
+			*num_slabs = 1;
+        } else {
             /*To hasten the process, this variable can be increased,
-              and then there will be less repeating attempts to balance
-              the shrinkage across slab classes*/
-            const int minimal_size_for_one_go=1;
-            uint slabs_gap=ceil_divide(mem_gap,settings.item_size_max);
-            if (slabs_gap<=minimal_size_for_one_go)
-                *num_slabs=slabs_gap;
-            else{
+             and then there will be less repeating attempts to balance
+             the shrinkage across slab classes*/
+            unsigned long long mem_gap = TOTAL_MALLOCED - mem_limit;
+            const unsigned int minimal_size_for_one_go = 1;
+            unsigned long long slabs_gap = ceil_divide(mem_gap, settings.item_size_max);
+            if (slabs_gap <= minimal_size_for_one_go)
+                *num_slabs = slabs_gap;
+            else {
 
                 /*Count the active slab classes, to compute the minimal number of
-                  slabs that will be taken from the leading candidate*/
-                unsigned int number_of_active_slab_classes=0;
+                 slabs that will be taken from the leading candidate*/
+                unsigned int number_of_active_slab_classes = 0;
                 for (i = POWER_SMALLEST; i < power_largest; i++) {
-                    if (total_pages[i] >1)/*only those that are eligible*/
+                    if (total_pages[i] > 1)/*only those that are eligible*/
                         ++number_of_active_slab_classes;
                 }
 
                 /*Compute a conservative bound on the number of slabs to kill
-                  from the first class candidate.
-                  If all active slab classes are to donate an equal share,
-                  this would be it. If one class is a better candidate, then we got it now.
-                  Next time we will check again who is a good candidate after we took from
-                  the best candidate at least its even share*/
+                 from the first class candidate.
+                 If all active slab classes are to donate an equal share,
+                 this would be it. If one class is a better candidate, then we got it now.
+                 Next time we will check again who is a good candidate after we took from
+                 the best candidate at least its even share*/
 
-                *num_slabs=ceil_divide(slabs_gap, number_of_active_slab_classes);
+                *num_slabs = ceil_divide(slabs_gap, number_of_active_slab_classes);
                 if (number_of_active_slab_classes * *num_slabs < slabs_gap)
-                    ++ *num_slabs; /*round up - better lose a bit too much from
-                                     the first class than drag the process long*/
+                    ++*num_slabs; /*round up - better lose a bit too much from
+                     the first class than drag the process long*/
 
                 /*Yet, we will not leave the source slab with less than one slab.
-                  This criterion can be fastened, as the distribution of
-                  slabs may change over time, and an old slab class can be
-                  no longer needed.*/
+                 This criterion can be fastened, as the distribution of
+                 slabs may change over time, and an old slab class can be
+                 no longer needed.*/
 
-                if (total_pages[source]-1 <*num_slabs)
-                    *num_slabs= total_pages[source]-1;
-
-
+                if (total_pages[source] - 1 < *num_slabs)
+                    *num_slabs = total_pages[source] - 1;
             }
         }
 
@@ -942,16 +940,15 @@ static int slab_automove_decision(int *src, int *dst, int *const num_slabs,
             return 2;
         else
             return 1;
-    }else
+    } else
         /*By now, if we got no source, then we do not have any class
-          with at least two pages, which means the reassignment will
-          fail if we use it (unless there is a mechanism to completely
-          clearing a class of slabs*/
+         with at least two pages, which means the reassignment will
+         fail if we use it (unless there is a mechanism to completely
+         clearing a class of slabs*/
 
-        *num_slabs=0;/*Not killing slabs if we do not have a source*/
+        *num_slabs = 0;/*Not killing slabs if we do not have a source*/
 
     return 0;
-
 }
 
 /* Slab rebalancer thread.
@@ -1146,28 +1143,29 @@ void stop_slab_maintenance_thread(void) {
    \return -1 when memory is inflexible because it was
    allocated as a single chunk.
    \return non-negative value as the number of slabs that need to be killed to reach this size.*/
-
-int memory_shrink_expand(const size_t size) {
+long long memory_shrink_expand(const size_t new_mem_limit) {
     print_statm("shrink_expand command");
-    if (mem_base == NULL) {
-        int gap=TOTAL_MALLOCED-size;
-        int old =mem_limit;
-        /* We are not using a preallocated large memory chunk */
-        if (size<settings.item_size_max)
-            return -2;
-        pthread_mutex_lock(&slabs_lock);
-        mem_limit=size;/*note that this does not set settings.maxbytes*/
-        pthread_mutex_unlock(&slabs_lock);
-
-        if (gap>0){
-            int forgap=ceil_divide(gap,settings.item_size_max);
-            fprintf(stderr,"gap %d for gap %d to reach from %d to %d when currently using %d\n",
-                    gap,forgap,old,(int)size,(int)TOTAL_MALLOCED);
-            return forgap;
-        }else
-            return 0;
-
-    } else {
+    if (mem_base != NULL)
         return -1;
-    }
+    /* We are not using a preallocated large memory chunk */
+    if (new_mem_limit < settings.item_size_max)
+        return -2;
+
+    pthread_mutex_lock(&slabs_lock);
+    size_t old_mem_limit = mem_limit;
+    mem_limit = new_mem_limit;/*note that this does not set settings.max`bytes*/
+    pthread_mutex_unlock(&slabs_lock);
+
+    unsigned long long total = TOTAL_MALLOCED;
+    if (total <= new_mem_limit)
+        return 0;
+
+    unsigned long long gap = total - new_mem_limit;
+    unsigned long long slabs_gap = ceil_divide(gap, settings.item_size_max);
+    fprintf(stdout, "[memory gap: %lld, slabs gap: %lld] "
+            "from %.2f MB to %.2f MB when currently using %.2f MB\n", gap, slabs_gap,
+            TO_MB(old_mem_limit), TO_MB(new_mem_limit), TO_MB(TOTAL_MALLOCED));
+    fflush(stdout);
+
+    return slabs_gap;
 }

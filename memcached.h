@@ -19,6 +19,7 @@
 #include <netdb.h>
 #include <pthread.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 #include "protocol_binary.h"
 #include "cache.h"
